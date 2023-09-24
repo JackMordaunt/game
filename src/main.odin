@@ -43,6 +43,7 @@ Entity :: struct {
 	vel:       rl.Vector2,
 }
 
+
 Player :: struct {
 	using entity:    Entity,
 	max_hp:          int,
