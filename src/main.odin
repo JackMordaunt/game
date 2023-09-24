@@ -1,17 +1,17 @@
 package main
 
+import "core:bufio"
 import "core:fmt"
 import "core:io"
-import "core:os"
-import "core:bufio"
-import "core:strings"
-import "core:strconv"
-import "core:unicode/utf8"
-import "core:unicode"
-import "core:slice"
-import "core:testing"
 import "core:math"
+import "core:os"
+import "core:slice"
 import "core:sort"
+import "core:strconv"
+import "core:strings"
+import "core:testing"
+import "core:unicode"
+import "core:unicode/utf8"
 import rl "vendor:raylib"
 
 /*
@@ -28,28 +28,26 @@ import rl "vendor:raylib"
 		- proection objective
 */
 
-WALL_SIZE    :: 16
-TURRET_SIZE  :: 16
-BULLET_SIZE  :: 16
-PLAYER_SIZE  :: 16
+WALL_SIZE :: 16
+TURRET_SIZE :: 16
+BULLET_SIZE :: 16
+PLAYER_SIZE :: 16
 PLAYER_SPEED :: 16
-ENEMY_SIZE   :: 16
-ENEMY_SPEED  :: 16
+ENEMY_SIZE :: 16
+ENEMY_SPEED :: 16
 
 Entity :: struct {
 	using pos: rl.Vector2,
-	size: f32,
-	speed: f32,
-	vel: rl.Vector2,
+	size:      f32,
+	speed:     f32,
+	vel:       rl.Vector2,
 }
 
 Player :: struct {
-	using entity: Entity,
-
-	max_hp: int,
-	hp: int,
-
-	weapon: Weapon,
+	using entity:    Entity,
+	max_hp:          int,
+	hp:              int,
+	weapon:          Weapon,
 	weapon_cooldown: i32,
 }
 
@@ -59,15 +57,13 @@ Weapon :: enum {
 }
 
 Enemy :: struct {
-	using entity: Entity,
-
-	max_hp: int,
-	hp: int,
-	awareness: f32,
-	mood: Enemy_Mood,
-
+	using entity:                 Entity,
+	max_hp:                       int,
+	hp:                           int,
+	awareness:                    f32,
+	mood:                         Enemy_Mood,
 	ticks_since_last_idle_change: i32,
-	idle_vel: rl.Vector2,
+	idle_vel:                     rl.Vector2,
 }
 
 Enemy_Mood :: enum {
@@ -77,64 +73,66 @@ Enemy_Mood :: enum {
 
 Wall :: struct {
 	using entity: Entity,
-	max_hp: i32,
-	hp: i32,
+	max_hp:       i32,
+	hp:           i32,
 }
 
 Auto_Turret :: struct {
-	using entity: Entity,
-
-	range: f32,
-	target: rl.Vector2,
-	has_target: bool,
-
-
-	fire_rate: i32,
+	using entity:  Entity,
+	range:         f32,
+	target:        rl.Vector2,
+	has_target:    bool,
+	fire_rate:     i32,
 	fire_cooldown: i32,
 }
 
 Bullet :: struct {
 	using entity: Entity,
-	destroyed: bool,
+	spawned_at:   int,
+	destroyed:    bool,
+}
+
+Objective :: struct {
+	using entity: Entity,
 }
 
 State :: struct {
-	dimensions: rl.Vector2,
-	start: rl.Vector2,
-	player: Player,
-	stride: i32,
-	stage: Stage,
-
-	enemy_spawn_rate: int,
+	dimensions:           rl.Vector2,
+	start:                rl.Vector2,
+	player:               Player,
+	stride:               i32,
+	stage:                Stage,
+	enemy_spawn_rate:     int,
 	enemy_spawn_cooldown: int,
-
-    ticks: i64,
-
-	enemies: [dynamic]Enemy,
-	turrets: [dynamic]Auto_Turret,
-	walls:   [dynamic]Wall,
-	bullets: [dynamic]Bullet,
-
-	debug: bool,
+	ticks:                i64,
+	enemies:              [dynamic]Enemy,
+	turrets:              [dynamic]Auto_Turret,
+	walls:                [dynamic]Wall,
+	bullets:              [dynamic]Bullet,
+	frame_by_frame:       bool,
+	debug:                bool,
 }
 
 Stage :: enum {
 	Playing,
 	Paused,
+	GameOver,
 }
 
 main :: proc() {
-	width := f32(PLAYER_SIZE*83)
-	height := f32(PLAYER_SIZE*41)
+	width := f32(PLAYER_SIZE * 83)
+	height := f32(PLAYER_SIZE * 41)
 
-	player := Player{
-    	size = PLAYER_SIZE,
-    	speed = 10,
-		x = 30,
-		y = 30,
+	player := Player {
+		size   = PLAYER_SIZE,
+		speed  = 3,
+		max_hp = 3,
+		hp     = 3,
+		x      = width / 2,
+		y      = height / 2,
 	}
 
-	state := State{
+	state := State {
 		dimensions = rl.Vector2{width, height},
 		start = player,
 		player = player,
@@ -152,11 +150,22 @@ main :: proc() {
 }
 
 update :: proc(s: ^State) {
-    if rl.IsKeyPressed(rl.KeyboardKey.ZERO) {
-    	s.debug = !s.debug
-    }
+	if rl.IsKeyPressed(rl.KeyboardKey.NINE) {
+		s.frame_by_frame = !s.frame_by_frame
+	}
 
-    s.ticks += 1
+	// In frame-by-frame mode we only process a frame if comma is pressed.
+	if s.frame_by_frame {
+		if !rl.IsKeyPressed(rl.KeyboardKey.COMMA) {
+			return
+		}
+	}
+
+	if rl.IsKeyPressed(rl.KeyboardKey.ZERO) {
+		s.debug = !s.debug
+	}
+
+	s.ticks += 1
 
 	switch s.stage {
 	case .Playing:
@@ -169,11 +178,14 @@ update :: proc(s: ^State) {
 		update_enemies(s)
 		update_turrets(s)
 		update_bullets(s)
-
 	case .Paused:
 		if rl.IsKeyPressed(rl.KeyboardKey.SPACE) {
 			s.stage = .Playing
 			return
+		}
+	case .GameOver:
+		if rl.GetKeyPressed() != rl.KeyboardKey.KEY_NULL {
+			reset_state(s)
 		}
 	}
 }
@@ -184,16 +196,29 @@ draw :: proc(s: ^State) {
 
 	switch s.stage {
 	case .Playing:
-
 		draw_bullets(s)
 		draw_turrets(s)
 		draw_enemies(s)
 		draw_walls(s)
 		draw_player(s)
-
 	case .Paused:
 		width := rl.MeasureText("paused", 30)
-		rl.DrawText("paused", i32(s.dimensions.x)/2-(width/2), i32(s.dimensions.y)/2, 30, rl.WHITE)
+		rl.DrawText(
+			"paused",
+			i32(s.dimensions.x) / 2 - (width / 2),
+			i32(s.dimensions.y) / 2,
+			30,
+			rl.WHITE,
+		)
+	case .GameOver:
+		width := rl.MeasureText("game over", 30)
+		rl.DrawText(
+			"game over",
+			i32(s.dimensions.x) / 2 - (width / 2),
+			i32(s.dimensions.y) / 2,
+			30,
+			rl.RED,
+		)
 	}
 
 	rl.EndDrawing()
@@ -201,25 +226,35 @@ draw :: proc(s: ^State) {
 
 update_player :: proc(s: ^State, p: ^Player) {
 	s.player.vel = rl.Vector2{}
-	defer s.player.pos += s.player.vel
 
 	player_input(s, &s.player)
+
+	s.player.pos += s.player.vel
+
+	for wall in &s.walls {
+		if rl.CheckCollisionBoxes(get_box(p), get_box(wall)) {
+			p.pos = de_embed(p, wall)
+		}
+	}
+
+	if p.hp <= 0 {
+		s.stage = .GameOver
+	}
 }
 
 player_input :: proc(s: ^State, p: ^Player) {
-	if rl.IsKeyDown(rl.KeyboardKey.RIGHT) {
-		p.vel.x += p.speed
-	}
-	if rl.IsKeyDown(rl.KeyboardKey.LEFT) {
-		p.vel.x -= p.speed
-	}
-	if rl.IsKeyDown(rl.KeyboardKey.UP) {
+	if rl.IsKeyDown(rl.KeyboardKey.W) {
 		p.vel.y -= p.speed
 	}
-	if rl.IsKeyDown(rl.KeyboardKey.DOWN) {
+	if rl.IsKeyDown(rl.KeyboardKey.A) {
+		p.vel.x -= p.speed
+	}
+	if rl.IsKeyDown(rl.KeyboardKey.S) {
 		p.vel.y += p.speed
 	}
-
+	if rl.IsKeyDown(rl.KeyboardKey.D) {
+		p.vel.x += p.speed
+	}
 	if rl.IsKeyPressed(rl.KeyboardKey.TAB) {
 		switch p.weapon {
 		case .Turret:
@@ -234,21 +269,22 @@ player_input :: proc(s: ^State, p: ^Player) {
 	if rl.IsKeyDown(rl.KeyboardKey.SPACE) && p.weapon_cooldown < 0 {
 		switch p.weapon {
 		case .Turret:
-    		p.weapon_cooldown = 120
-    		append(&s.turrets, Auto_Turret{
-    			pos = p.pos,
-    			size = TURRET_SIZE,
-    			range = 128,
-    			fire_rate = 30,
-    		})
-    	case .Wall:
-		p.weapon_cooldown = 2
-    		append(&s.walls, Wall{
-    			max_hp = 10,
-    			hp = 10,
-    			pos = p.pos,
-    			size = WALL_SIZE,
-    		})
+			p.weapon_cooldown = 120
+			append(
+				&s.turrets,
+				Auto_Turret{
+					pos = p.pos,
+					size = TURRET_SIZE,
+					range = 128,
+					fire_rate = 30,
+				},
+			)
+		case .Wall:
+			p.weapon_cooldown = 2
+			append(
+				&s.walls,
+				Wall{max_hp = 10, hp = 10, pos = p.pos, size = WALL_SIZE},
+			)
 		}
 	}
 }
@@ -257,47 +293,56 @@ player_input :: proc(s: ^State, p: ^Player) {
 // TODO: handle more than just 8 directions.
 dir :: proc(a, b: rl.Vector2) -> rl.Vector2 {
 	d := dist(a, b)
+	// 	angle := math.atan(f32(d.x) / f32(d.y)) * math.PI
+	// 	fmt.println(angle)
 	out := rl.Vector2{0, 0}
 	if d.x < 0 {
-    	out.x = -1
+		out.x = -1
 	}
 	if d.x > 0 {
-    	out.x = 1
+		out.x = 1
 	}
 	if d.y < 0 {
-    	out.y = -1
+		out.y = -1
 	}
 	if d.y > 0 {
-    	out.y = 1
+		out.y = 1
 	}
 	return out
 }
 
-dist :: proc(a, b: rl.Vector2) -> rl.Vector2 {
+dist :: proc {
+	dist_vec2,
+	dist_vec3,
+}
+
+dist_vec3 :: proc(a, b: rl.Vector2) -> rl.Vector2 {
 	return a - b
+}
+
+dist_vec2 :: proc(a, b: rl.Vector3) -> rl.Vector2 {
+	d := a - b
+	return rl.Vector2{d.x, d.y}
 }
 
 abs_dist :: proc(a, b: rl.Vector2) -> rl.Vector2 {
 	d := a - b
-	return rl.Vector2{
-		math.abs(d.x),
-		math.abs(d.y),
-	}
+	return rl.Vector2{math.abs(d.x), math.abs(d.y)}
 }
 
+// TODO: spawn faster over time... Waves? 
 update_enemies :: proc(s: ^State) {
-
 	if s.ticks % 120 == 0 {
-        en := Enemy{
-            max_hp = 3,
-            hp = 3,
-            mood = .Idle,
-            speed = 1,
-            size = ENEMY_SIZE,
-            awareness = 256,
+		en := Enemy {
+			max_hp = 3,
+			hp = 3,
+			mood = .Idle,
+			speed = 1,
+			size = ENEMY_SIZE,
+			awareness = 256,
 			pos = rl.Vector2{
-                f32(rl.GetRandomValue(0, i32(s.dimensions.x))),
-                f32(rl.GetRandomValue(0, i32(s.dimensions.y))),
+				f32(rl.GetRandomValue(0, i32(s.dimensions.x))),
+				f32(rl.GetRandomValue(0, i32(s.dimensions.y))),
 			},
 		}
 		append(&s.enemies, en)
@@ -317,35 +362,32 @@ update_enemy :: proc(s: ^State, en: ^Enemy) {
 
 	switch en.mood {
 	case .Agro:
+		en.speed = 1
 		// TODO:
 		// hunt down player
 		en.vel += dir(s.player, en) * en.speed
 	case .Idle:
-		// passively move around or be still
-    	en.ticks_since_last_idle_change += 1
-    	if en.ticks_since_last_idle_change > 30 {
-        	en.ticks_since_last_idle_change = 0
-        	en.idle_vel = rl.Vector2{}
-			en.idle_vel += rl.Vector2{f32(rl.GetRandomValue(-1, 1)), f32(rl.GetRandomValue(-1, 1))}
-    	}
-
-    	en.vel += en.idle_vel
+		en.speed = 0.3
+		en.vel += dir(s.player, en) * en.speed
 	}
 
 	en.pos += en.vel
 
 	for w in s.walls {
 		if rl.CheckCollisionBoxes(get_box(w), get_box(en)) {
-    		// FIXME: de-embed only by nearest axis
-			d := dist(w, en)
-			if math.abs(d.x) < math.abs(d.y) {
-				en.pos.x -= d.x
-			} else if math.abs(d.y) < math.abs(d.x) {
-				en.pos.y -= d.y
-			} else {
-				en.pos -= d
-			}
+			en.pos = de_embed(en, w)
 		}
+	}
+
+	for w in s.turrets {
+		if rl.CheckCollisionBoxes(get_box(w), get_box(en)) {
+			en.pos = de_embed(en, w)
+		}
+	}
+
+	if rl.CheckCollisionBoxes(get_box(s.player), get_box(en)) {
+		player_take_damage(&s.player)
+		en.hp = 0
 	}
 }
 
@@ -361,24 +403,33 @@ update_mood :: proc(s: ^State, en: ^Enemy) {
 
 update_bullets :: proc(s: ^State) {
 	for b, ii in &s.bullets {
-    	update_bullet(s, &b)
-    	if b.destroyed {
-    		ordered_remove(&s.bullets, ii)
-    	}
+		update_bullet(s, &b)
+		if b.destroyed {
+			ordered_remove(&s.bullets, ii)
+		}
 	}
 }
 
 update_bullet :: proc(s: ^State, b: ^Bullet) {
+
+	// If bullet is oob, destroy it.
+	if !rl.CheckCollisionBoxes(get_box(b), get_box(s.dimensions)) {
+		b.destroyed = true
+		return
+	}
+
 	b.pos += b.vel * b.speed
-	// TODO: check & handle collisions with enemy.
+	center := rl.Vector3{b.x, b.y, 0}
+
 	for en in &s.enemies {
-		box := rl.BoundingBox{
-			min = rl.Vector3{en.x-en.size/2, en.y-en.size/2, 0},
-			max = rl.Vector3{en.x+en.size/2, en.y+en.size/2, 0},
-		}
-		center := rl.Vector3{b.x, b.y, 0}
-		if rl.CheckCollisionBoxSphere(box, center, b.size) {
+		if rl.CheckCollisionBoxSphere(get_box(en), center, b.size) {
 			en.hp -= 1
+			b.destroyed = true
+		}
+	}
+
+	for wall in &s.walls {
+		if rl.CheckCollisionBoxSphere(get_box(wall), center, b.size) {
 			b.destroyed = true
 		}
 	}
@@ -386,7 +437,7 @@ update_bullet :: proc(s: ^State, b: ^Bullet) {
 
 update_turrets :: proc(s: ^State) {
 	for en in &s.turrets {
-    	update_turret(s, &en)
+		update_turret(s, &en)
 	}
 }
 
@@ -394,25 +445,21 @@ update_turret :: proc(s: ^State, t: ^Auto_Turret) {
 	// aquire target
 	// find closest enemy in range, and shoot at it.
 
-	acquire_target(s, t)
+	turret_acquire_target(s, t)
 
 	t.fire_cooldown -= 1
 
 	if t.has_target {
-    	if t.fire_cooldown <= 0 {
-    		t.fire_cooldown = t.fire_rate
-    		append(&s.bullets, Bullet{
-    			pos = t.pos,
-    			vel = dir(t.target, t.pos),
-    			size = 4,
-    			speed = 1,
-    		})
-    	}
+		if t.fire_cooldown <= 0 {
+			t.fire_cooldown = t.fire_rate
+			turret_fire_at(s, t, t.target)
+		}
 	}
 }
 
-acquire_target :: proc(s: ^State, t: ^Auto_Turret) {
-    t.target = rl.Vector2{}
+// turret_acquire_target sets the target field to point to the nearest in-range enemy.
+turret_acquire_target :: proc(s: ^State, t: ^Auto_Turret) {
+	t.target = rl.Vector2{}
 
 	targets := [dynamic]rl.Vector2{}
 	defer delete(targets)
@@ -423,7 +470,6 @@ acquire_target :: proc(s: ^State, t: ^Auto_Turret) {
 		}
 	}
 
-	// FIXME: not sure if this works as expected.
 	slice.sort_by(targets[:], proc(l, r: rl.Vector2) -> bool {
 		return l.x < r.x && l.y < r.y
 	})
@@ -437,8 +483,21 @@ acquire_target :: proc(s: ^State, t: ^Auto_Turret) {
 }
 
 draw_player :: proc(s: ^State) {
-	half_sz := s.player.size/2
-    rl.DrawRectangle(i32(s.player.x-half_sz), i32(s.player.y-half_sz), i32(s.player.size), i32(s.player.size), rl.GREEN)
+	half_sz := s.player.size / 2
+	rl.DrawRectangle(
+		i32(s.player.x - half_sz),
+		i32(s.player.y - half_sz),
+		i32(s.player.size),
+		i32(s.player.size),
+		rl.GREEN,
+	)
+	for w in s.walls {
+		r := rl.GetCollisionRec(
+			rect_from_entity(s.player),
+			rect_from_entity(w),
+		)
+		rl.DrawRectangleRec(r, rl.PURPLE)
+	}
 }
 
 draw_enemies :: proc(s: ^State) {
@@ -465,14 +524,25 @@ draw_enemy :: proc(s: ^State, en: Enemy) {
 	if en.mood == .Agro {
 		col = rl.RED
 	}
-	col = rl.ColorAlpha(col, f32(255*en.hp/en.max_hp))
+	col = rl.ColorAlpha(col, f32(255 * en.hp / en.max_hp))
 
-	half_sz := en.size/2
-	rl.DrawRectangle(i32(en.x-half_sz), i32(en.y-half_sz), i32(en.size), i32(en.size), col)
+	half_sz := en.size / 2
+	rl.DrawRectangle(
+		i32(en.x - half_sz),
+		i32(en.y - half_sz),
+		i32(en.size),
+		i32(en.size),
+		col,
+	)
 
 	if s.debug {
-    	// Draw agro radius.
-    	rl.DrawCircleLines(i32(en.x), i32(en.y), en.awareness, rl.PURPLE)
+		// Draw agro radius.
+		rl.DrawCircleLines(
+			i32(en.x),
+			i32(en.y),
+			en.awareness,
+			rl.ColorAlpha(rl.PURPLE, 0.2),
+		)
 	}
 }
 
@@ -481,11 +551,23 @@ draw_bullet :: proc(s: ^State, en: Bullet) {
 }
 
 draw_turret :: proc(s: ^State, en: Auto_Turret) {
-	half_sz := en.size/2
-	rl.DrawRectangle(i32(en.x-half_sz), i32(en.y-half_sz), i32(en.size), i32(en.size), rl.GRAY)
+	half_sz := en.size / 2
+	rl.DrawRectangle(
+		i32(en.x - half_sz),
+		i32(en.y - half_sz),
+		i32(en.size),
+		i32(en.size),
+		rl.GRAY,
+	)
 
 	if en.has_target && s.debug {
-    	rl.DrawLine(i32(en.x), i32(en.y), i32(en.target.x), i32(en.target.y), rl.LIGHTGRAY)
+		rl.DrawLine(
+			i32(en.x),
+			i32(en.y),
+			i32(en.target.x),
+			i32(en.target.y),
+			rl.LIGHTGRAY,
+		)
 	}
 }
 
@@ -497,21 +579,121 @@ draw_walls :: proc(s: ^State) {
 }
 
 draw_wall :: proc(s: ^State, en: Wall) {
-	half_sz := en.size/2
-	rl.DrawRectangle(i32(en.x-half_sz), i32(en.y-half_sz), i32(en.size), i32(en.size), rl.DARKGRAY)
+	half_sz := en.size / 2
+	rl.DrawRectangle(
+		i32(en.x - half_sz),
+		i32(en.y - half_sz),
+		i32(en.size),
+		i32(en.size),
+		rl.DARKGRAY,
+	)
 }
 
 in_range :: proc(a, b: rl.Vector2, range: f32) -> bool {
 	d := abs_dist(a, b)
 	if d.x <= range && d.y <= range {
-    	return true
+		return true
 	}
 	return false
 }
 
-get_box :: proc(en: Entity) -> rl.BoundingBox {
-	return rl.BoundingBox{
-		min = rl.Vector3{en.pos.x - en.size/2, en.pos.y - en.size/2, 0},
-		max = rl.Vector3{en.pos.x + en.size/2, en.pos.y + en.size/2, 0},
-	}
+get_box :: proc {
+	get_box_from_entity,
+	get_box_from_dims,
 }
+
+get_box_from_entity :: proc(en: Entity) -> rl.BoundingBox {
+	return(
+		rl.BoundingBox{
+			min = rl.Vector3{
+				en.pos.x - en.size / 2,
+				en.pos.y - en.size / 2,
+				0,
+			},
+			max = rl.Vector3{
+				en.pos.x + en.size / 2,
+				en.pos.y + en.size / 2,
+				0,
+			},
+		} \
+	)
+}
+
+
+get_box_from_dims :: proc(dims: rl.Vector2) -> rl.BoundingBox {
+	return rl.BoundingBox{max = rl.Vector3{dims.x, dims.y, 0}}
+}
+
+player_take_damage :: proc(pl: ^Player) {
+	pl.hp -= 1
+}
+
+
+reset_state :: proc(s: ^State) {
+	s.player.hp = s.player.max_hp
+	s.player.pos = s.start
+	s.stage = .Playing
+
+	clear(&s.enemies)
+	clear(&s.turrets)
+	clear(&s.walls)
+	clear(&s.bullets)
+}
+
+
+turret_fire_at :: proc(s: ^State, t: ^Auto_Turret, target: rl.Vector2) {
+	direction := dir(target, t.pos)
+	bullet := Bullet {
+		pos   = t.pos,
+		vel   = direction,
+		size  = 4,
+		speed = 1,
+	}
+	append(&s.bullets, bullet)
+}
+
+
+// de_embed resolves colliding entities, returning the new position of the subject.
+de_embed :: proc(subject: Entity, object: Entity) -> (pos: rl.Vector2) {
+	pos = subject.pos
+
+	subject_rect := rect_from_entity(subject)
+	object_rect := rect_from_entity(object)
+
+	object_box := get_box(object)
+
+	r := rl.GetCollisionRec(subject_rect, object_rect)
+
+	// pick the axis with the larger distance, then pick the side
+	// the collision rect is closer to. 
+	if r.width > r.height {
+		if math.abs(r.y - object_box.max.y) >
+		   math.abs(r.y - object_box.min.y) {
+			pos.y -= r.height
+		} else {
+			pos.y += r.height
+		}
+	} else {
+		if math.abs(r.x - object_box.max.x) >
+		   math.abs(r.x - object_box.min.x) {
+			pos.x -= r.width
+		} else {
+			pos.x += r.width
+		}
+	}
+
+	return pos
+}
+
+rect_from_entity :: proc(en: Entity) -> rl.Rectangle {
+	b := get_box(en)
+	return(
+		rl.Rectangle{
+			x = b.min.x,
+			y = b.min.y,
+			width = b.max.x - b.min.x,
+			height = b.max.y - b.min.y,
+		} \
+	)
+}
+
