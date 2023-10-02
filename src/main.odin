@@ -38,7 +38,8 @@ ENEMY_SPEED :: 16
 
 Entity :: struct {
 	using pos: rl.Vector2,
-	size:      f32,
+	width:     f32,
+	height:    f32,
 	speed:     f32,
 	vel:       rl.Vector2,
 }
@@ -47,13 +48,17 @@ Player :: struct {
 	using entity:    Entity,
 	max_hp:          int,
 	hp:              int,
+	currency:        int,
 	weapon:          Weapon,
 	weapon_cooldown: i32,
+	is_hit:          bool,
+	hit_duration:    int,
 }
 
 Weapon :: enum {
 	Turret,
-	Wall,
+	Horizontal_Wall,
+	Vertical_Wall,
 }
 
 Enemy :: struct {
@@ -64,6 +69,8 @@ Enemy :: struct {
 	mood:                         Enemy_Mood,
 	ticks_since_last_idle_change: i32,
 	idle_vel:                     rl.Vector2,
+	is_hit:                       bool,
+	hit_duration:                 int,
 }
 
 Enemy_Mood :: enum {
@@ -124,12 +131,14 @@ main :: proc() {
 	height := f32(PLAYER_SIZE * 41)
 
 	player := Player {
-		size   = PLAYER_SIZE,
-		speed  = 3,
-		max_hp = 3,
-		hp     = 3,
-		x      = width / 2,
-		y      = height / 2,
+		width    = PLAYER_SIZE,
+		height   = PLAYER_SIZE,
+		speed    = 3,
+		max_hp   = 3,
+		hp       = 3,
+		x        = width / 2,
+		y        = height / 2,
+		currency = 10,
 	}
 
 	state := State {
@@ -201,6 +210,7 @@ draw :: proc(s: ^State) {
 		draw_enemies(s)
 		draw_walls(s)
 		draw_player(s)
+		draw_ui(s)
 	case .Paused:
 		width := rl.MeasureText("paused", 30)
 		rl.DrawText(
@@ -225,6 +235,14 @@ draw :: proc(s: ^State) {
 }
 
 update_player :: proc(s: ^State, p: ^Player) {
+	if p.is_hit {
+		p.hit_duration -= 1
+		if p.hit_duration == -1 {
+			p.is_hit = false
+			p.hit_duration = 0
+		}
+	}
+
 	s.player.vel = rl.Vector2{}
 
 	player_input(s, &s.player)
@@ -255,18 +273,24 @@ player_input :: proc(s: ^State, p: ^Player) {
 	if rl.IsKeyDown(rl.KeyboardKey.D) {
 		p.vel.x += p.speed
 	}
+
 	if rl.IsKeyPressed(rl.KeyboardKey.TAB) {
 		switch p.weapon {
 		case .Turret:
-			p.weapon = .Wall
-		case .Wall:
+			p.weapon = .Horizontal_Wall
+		case .Horizontal_Wall:
+			p.weapon = .Vertical_Wall
+		case .Vertical_Wall:
 			p.weapon = .Turret
 		}
 	}
 
 	p.weapon_cooldown -= 1
 
-	if rl.IsKeyDown(rl.KeyboardKey.SPACE) && p.weapon_cooldown < 0 {
+	if rl.IsKeyDown(rl.KeyboardKey.SPACE) &&
+	   p.weapon_cooldown < 0 &&
+	   p.currency > 0 {
+		p.currency -= 1
 		switch p.weapon {
 		case .Turret:
 			p.weapon_cooldown = 120
@@ -274,16 +298,35 @@ player_input :: proc(s: ^State, p: ^Player) {
 				&s.turrets,
 				Auto_Turret{
 					pos = p.pos,
-					size = TURRET_SIZE,
+					width = TURRET_SIZE,
+					height = TURRET_SIZE,
 					range = 128,
 					fire_rate = 30,
 				},
 			)
-		case .Wall:
-			p.weapon_cooldown = 2
+		case .Horizontal_Wall:
+			p.weapon_cooldown = 30
 			append(
 				&s.walls,
-				Wall{max_hp = 10, hp = 10, pos = p.pos, size = WALL_SIZE},
+				Wall{
+					max_hp = 10,
+					hp = 10,
+					pos = p.pos,
+					width = WALL_SIZE * 2,
+					height = WALL_SIZE / 2,
+				},
+			)
+		case .Vertical_Wall:
+			p.weapon_cooldown = 30
+			append(
+				&s.walls,
+				Wall{
+					max_hp = 10,
+					hp = 10,
+					pos = p.pos,
+					width = WALL_SIZE / 2,
+					height = WALL_SIZE * 2,
+				},
 			)
 		}
 	}
@@ -338,7 +381,8 @@ update_enemies :: proc(s: ^State) {
 			hp = 3,
 			mood = .Idle,
 			speed = 1,
-			size = ENEMY_SIZE,
+			width = ENEMY_SIZE,
+			height = ENEMY_SIZE,
 			awareness = 256,
 			pos = rl.Vector2{
 				f32(rl.GetRandomValue(0, i32(s.dimensions.x))),
@@ -350,12 +394,20 @@ update_enemies :: proc(s: ^State) {
 	for en, ii in &s.enemies {
 		update_enemy(s, &en)
 		if en.hp <= 0 {
+			s.player.currency += 1
 			ordered_remove(&s.enemies, ii)
 		}
 	}
 }
 
 update_enemy :: proc(s: ^State, en: ^Enemy) {
+	if en.is_hit {
+		en.hit_duration -= 1
+		if en.hit_duration < 0 {
+			en.is_hit = false
+		}
+	}
+
 	en.vel = rl.Vector2{}
 
 	update_mood(s, en)
@@ -385,6 +437,7 @@ update_enemy :: proc(s: ^State, en: ^Enemy) {
 		}
 	}
 
+	// Is the enemy colliding with the player? 
 	if rl.CheckCollisionBoxes(get_box(s.player), get_box(en)) {
 		player_take_damage(&s.player)
 		en.hp = 0
@@ -422,14 +475,14 @@ update_bullet :: proc(s: ^State, b: ^Bullet) {
 	center := rl.Vector3{b.x, b.y, 0}
 
 	for en in &s.enemies {
-		if rl.CheckCollisionBoxSphere(get_box(en), center, b.size) {
-			en.hp -= 1
+		if rl.CheckCollisionBoxSphere(get_box(en), center, b.width) {
+			enemy_take_damage(&en)
 			b.destroyed = true
 		}
 	}
 
 	for wall in &s.walls {
-		if rl.CheckCollisionBoxSphere(get_box(wall), center, b.size) {
+		if rl.CheckCollisionBoxSphere(get_box(wall), center, b.width) {
 			b.destroyed = true
 		}
 	}
@@ -483,14 +536,25 @@ turret_acquire_target :: proc(s: ^State, t: ^Auto_Turret) {
 }
 
 draw_player :: proc(s: ^State) {
-	half_sz := s.player.size / 2
+	half_h_sz := s.player.width / 2
+	half_w_sz := s.player.height / 2
+
+	col := rl.GREEN
+
+	if s.player.is_hit {
+		col = rl.MAGENTA
+	}
+
+	col = rl.ColorAlpha(col, f32(s.player.hp) / f32(s.player.max_hp))
+
 	rl.DrawRectangle(
-		i32(s.player.x - half_sz),
-		i32(s.player.y - half_sz),
-		i32(s.player.size),
-		i32(s.player.size),
-		rl.GREEN,
+		i32(s.player.x - half_w_sz),
+		i32(s.player.y - half_h_sz),
+		i32(s.player.width),
+		i32(s.player.height),
+		col,
 	)
+
 	for w in s.walls {
 		r := rl.GetCollisionRec(
 			rect_from_entity(s.player),
@@ -521,17 +585,21 @@ draw_bullets :: proc(s: ^State) {
 draw_enemy :: proc(s: ^State, en: Enemy) {
 	// Draw body.
 	col := rl.MAROON
+
 	if en.mood == .Agro {
 		col = rl.RED
 	}
-	col = rl.ColorAlpha(col, f32(255 * en.hp / en.max_hp))
 
-	half_sz := en.size / 2
+	col = rl.ColorAlpha(col, f32(en.hp) / f32(en.max_hp))
+
+	half_w_sz := en.width / 2
+	half_h_sz := en.height / 2
+
 	rl.DrawRectangle(
-		i32(en.x - half_sz),
-		i32(en.y - half_sz),
-		i32(en.size),
-		i32(en.size),
+		i32(en.x - half_w_sz),
+		i32(en.y - half_h_sz),
+		i32(en.width),
+		i32(en.height),
 		col,
 	)
 
@@ -547,16 +615,18 @@ draw_enemy :: proc(s: ^State, en: Enemy) {
 }
 
 draw_bullet :: proc(s: ^State, en: Bullet) {
-	rl.DrawCircle(i32(en.x), i32(en.y), en.size, rl.ORANGE)
+	// NOTE: Assume width is the size for the bullet sphere.
+	rl.DrawCircle(i32(en.x), i32(en.y), en.width, rl.ORANGE)
 }
 
 draw_turret :: proc(s: ^State, en: Auto_Turret) {
-	half_sz := en.size / 2
+	half_w_sz := en.width / 2
+	half_h_sz := en.height / 2
 	rl.DrawRectangle(
-		i32(en.x - half_sz),
-		i32(en.y - half_sz),
-		i32(en.size),
-		i32(en.size),
+		i32(en.x - half_w_sz),
+		i32(en.y - half_h_sz),
+		i32(en.width),
+		i32(en.height),
 		rl.GRAY,
 	)
 
@@ -571,7 +641,6 @@ draw_turret :: proc(s: ^State, en: Auto_Turret) {
 	}
 }
 
-
 draw_walls :: proc(s: ^State) {
 	for w in &s.walls {
 		draw_wall(s, w)
@@ -579,14 +648,24 @@ draw_walls :: proc(s: ^State) {
 }
 
 draw_wall :: proc(s: ^State, en: Wall) {
-	half_sz := en.size / 2
+	half_w_sz := en.width / 2
+	half_h_sz := en.height / 2
 	rl.DrawRectangle(
-		i32(en.x - half_sz),
-		i32(en.y - half_sz),
-		i32(en.size),
-		i32(en.size),
+		i32(en.x - half_w_sz),
+		i32(en.y - half_h_sz),
+		i32(en.width),
+		i32(en.height),
 		rl.DARKGRAY,
 	)
+}
+
+draw_ui :: proc(s: ^State) {
+	hp_text := rl.TextFormat("Health: %d", s.player.hp)
+	hp_text_width := rl.MeasureText(hp_text, 24)
+	rl.DrawText(hp_text, 10, 10, 24, rl.WHITE)
+
+	currency_text := rl.TextFormat("Currency: %d", s.player.currency)
+	rl.DrawText(currency_text, 30 + hp_text_width, 10, 24, rl.WHITE)
 }
 
 in_range :: proc(a, b: rl.Vector2, range: f32) -> bool {
@@ -606,19 +685,18 @@ get_box_from_entity :: proc(en: Entity) -> rl.BoundingBox {
 	return(
 		rl.BoundingBox{
 			min = rl.Vector3{
-				en.pos.x - en.size / 2,
-				en.pos.y - en.size / 2,
+				en.pos.x - en.width / 2,
+				en.pos.y - en.height / 2,
 				0,
 			},
 			max = rl.Vector3{
-				en.pos.x + en.size / 2,
-				en.pos.y + en.size / 2,
+				en.pos.x + en.width / 2,
+				en.pos.y + en.height / 2,
 				0,
 			},
 		} \
 	)
 }
-
 
 get_box_from_dims :: proc(dims: rl.Vector2) -> rl.BoundingBox {
 	return rl.BoundingBox{max = rl.Vector3{dims.x, dims.y, 0}}
@@ -626,12 +704,14 @@ get_box_from_dims :: proc(dims: rl.Vector2) -> rl.BoundingBox {
 
 player_take_damage :: proc(pl: ^Player) {
 	pl.hp -= 1
+	pl.is_hit = true
+	pl.hit_duration = 15
 }
-
 
 reset_state :: proc(s: ^State) {
 	s.player.hp = s.player.max_hp
 	s.player.pos = s.start
+	s.player.currency = 1
 	s.stage = .Playing
 
 	clear(&s.enemies)
@@ -644,10 +724,11 @@ reset_state :: proc(s: ^State) {
 turret_fire_at :: proc(s: ^State, t: ^Auto_Turret, target: rl.Vector2) {
 	direction := dir(target, t.pos)
 	bullet := Bullet {
-		pos   = t.pos,
-		vel   = direction,
-		size  = 4,
-		speed = 1,
+		pos    = t.pos,
+		vel    = direction,
+		width  = 4,
+		height = 4,
+		speed  = 1,
 	}
 	append(&s.bullets, bullet)
 }
@@ -695,5 +776,11 @@ rect_from_entity :: proc(en: Entity) -> rl.Rectangle {
 			height = b.max.y - b.min.y,
 		} \
 	)
+}
+
+enemy_take_damage :: proc(enemy: ^Enemy) {
+	enemy.hp -= 1
+	enemy.is_hit = true
+	enemy.hit_duration = 30
 }
 
