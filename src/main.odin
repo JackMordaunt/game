@@ -248,6 +248,12 @@ update_player :: proc(s: ^State, p: ^Player) {
 		}
 	}
 
+	for turret in &s.turrets {
+		if rl.CheckCollisionBoxes(get_box(p), get_box(turret)) {
+			p.pos = de_embed(p, turret)
+		}
+	}
+
 	if p.hp <= 0 {
 		s.stage = .GameOver
 	}
