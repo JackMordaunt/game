@@ -69,8 +69,6 @@ Enemy :: struct {
 	mood:                         Enemy_Mood,
 	ticks_since_last_idle_change: i32,
 	idle_vel:                     rl.Vector2,
-	is_hit:                       bool,
-	hit_duration:                 int,
 }
 
 Enemy_Mood :: enum {
@@ -401,13 +399,6 @@ update_enemies :: proc(s: ^State) {
 }
 
 update_enemy :: proc(s: ^State, en: ^Enemy) {
-	if en.is_hit {
-		en.hit_duration -= 1
-		if en.hit_duration < 0 {
-			en.is_hit = false
-		}
-	}
-
 	en.vel = rl.Vector2{}
 
 	update_mood(s, en)
@@ -780,7 +771,5 @@ rect_from_entity :: proc(en: Entity) -> rl.Rectangle {
 
 enemy_take_damage :: proc(enemy: ^Enemy) {
 	enemy.hp -= 1
-	enemy.is_hit = true
-	enemy.hit_duration = 30
 }
 
