@@ -417,6 +417,15 @@ update_enemy :: proc(s: ^State, en: ^Enemy) {
 
 	en.pos += en.vel
 
+	for enemy in &s.enemies {
+		if &enemy == en {
+			continue
+		}
+		if rl.CheckCollisionBoxes(get_box(enemy), get_box(en)) {
+			en.pos = de_embed(en, enemy)
+		}
+	}
+
 	for w in s.walls {
 		if rl.CheckCollisionBoxes(get_box(w), get_box(en)) {
 			en.pos = de_embed(en, w)
