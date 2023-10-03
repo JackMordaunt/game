@@ -426,9 +426,10 @@ update_enemy :: proc(s: ^State, en: ^Enemy) {
 		}
 	}
 
-	for w in s.walls {
+	for w in &s.walls {
 		if rl.CheckCollisionBoxes(get_box(w), get_box(en)) {
 			en.pos = de_embed(en, w)
+			wall_take_damage(&w)
 		}
 	}
 
@@ -651,12 +652,16 @@ draw_walls :: proc(s: ^State) {
 draw_wall :: proc(s: ^State, en: Wall) {
 	half_w_sz := en.width / 2
 	half_h_sz := en.height / 2
+
+	col := rl.DARKGRAY
+	col = rl.ColorAlpha(col, f32(en.hp) / f32(en.max_hp))
+
 	rl.DrawRectangle(
 		i32(en.x - half_w_sz),
 		i32(en.y - half_h_sz),
 		i32(en.width),
 		i32(en.height),
-		rl.DARKGRAY,
+		col,
 	)
 }
 
@@ -781,5 +786,9 @@ rect_from_entity :: proc(en: Entity) -> rl.Rectangle {
 
 enemy_take_damage :: proc(enemy: ^Enemy) {
 	enemy.hp -= 1
+}
+
+wall_take_damage :: proc(wall: ^Wall) {
+	wall.hp -= 1
 }
 
