@@ -176,11 +176,6 @@ update :: proc(s: ^State) {
 
 	switch s.stage {
 	case .Playing:
-		// if rl.IsKeyPressed(rl.KeyboardKey.SPACE) {
-		// 	s.stage = .Paused
-		// 	return
-		// }
-
 		update_player(s, &s.player)
 		update_enemies(s)
 		update_turrets(s)
