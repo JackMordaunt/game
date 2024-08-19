@@ -4,6 +4,8 @@ import "core:bufio"
 import "core:fmt"
 import "core:io"
 import "core:math"
+import "core:math/linalg"
+import "core:math/rand"
 import "core:os"
 import "core:slice"
 import "core:sort"
@@ -16,11 +18,9 @@ import rl "vendor:raylib"
 
 /*
 	TODO:
-		- fully directional movement (not stuck to 8 discrete directions)
 		- turret line of sight (cast a ray, see if wall is hit?)
-		- breakable walls
 		- breakable turret
-		- trip-mine weapon
+		- trip-mine tool
 		- killable player
 		- kill score
 		- faster spawn rate over time
@@ -45,17 +45,17 @@ Entity :: struct {
 }
 
 Player :: struct {
-	using entity:    Entity,
-	max_hp:          int,
-	hp:              int,
-	currency:        int,
-	weapon:          Weapon,
-	weapon_cooldown: i32,
-	is_hit:          bool,
-	hit_duration:    int,
+	using entity:  Entity,
+	max_hp:        int,
+	hp:            int,
+	currency:      int,
+	tool:          Tool,
+	tool_cooldown: i32,
+	is_hit:        bool,
+	hit_duration:  int,
 }
 
-Weapon :: enum {
+Tool :: enum {
 	Turret,
 	Horizontal_Wall,
 	Vertical_Wall,
@@ -63,6 +63,7 @@ Weapon :: enum {
 
 Enemy :: struct {
 	using entity:                 Entity,
+	age_ticks:                    int,
 	max_hp:                       int,
 	hp:                           int,
 	awareness:                    f32,
@@ -84,11 +85,29 @@ Wall :: struct {
 
 Auto_Turret :: struct {
 	using entity:  Entity,
+	gun:           Gun,
 	range:         f32,
 	target:        rl.Vector2,
 	has_target:    bool,
-	fire_rate:     i32,
 	fire_cooldown: i32,
+}
+
+Gun :: union {
+	Machine_Gun,
+	Shot_Gun,
+	Lazer_Gun,
+}
+
+Machine_Gun :: struct {
+	fire_rate: i32,
+}
+
+Shot_Gun :: struct {
+	fire_rate: i32,
+}
+
+Lazer_Gun :: struct {
+	fire_rate: i32,
 }
 
 Bullet :: struct {
@@ -115,6 +134,7 @@ State :: struct {
 	walls:                [dynamic]Wall,
 	bullets:              [dynamic]Bullet,
 	frame_by_frame:       bool,
+	build:                bool,
 	debug:                bool,
 }
 
@@ -141,8 +161,8 @@ main :: proc() {
 
 	state := State {
 		dimensions = rl.Vector2{width, height},
-		start = player,
-		player = player,
+		start      = player,
+		player     = player,
 	}
 
 	rl.SetRandomSeed(100)
@@ -180,6 +200,7 @@ update :: proc(s: ^State) {
 		update_enemies(s)
 		update_turrets(s)
 		update_bullets(s)
+		update_walls(s)
 	case .Paused:
 		if rl.IsKeyPressed(rl.KeyboardKey.SPACE) {
 			s.stage = .Playing
@@ -203,6 +224,7 @@ draw :: proc(s: ^State) {
 		draw_enemies(s)
 		draw_walls(s)
 		draw_player(s)
+		draw_build(s)
 		draw_ui(s)
 	case .Paused:
 		width := rl.MeasureText("paused", 30)
@@ -274,83 +296,92 @@ player_input :: proc(s: ^State, p: ^Player) {
 	}
 
 	if rl.IsKeyPressed(rl.KeyboardKey.TAB) {
-		switch p.weapon {
+		switch p.tool {
 		case .Turret:
-			p.weapon = .Horizontal_Wall
+			p.tool = .Horizontal_Wall
 		case .Horizontal_Wall:
-			p.weapon = .Vertical_Wall
+			p.tool = .Vertical_Wall
 		case .Vertical_Wall:
-			p.weapon = .Turret
+			p.tool = .Turret
 		}
 	}
 
-	p.weapon_cooldown -= 1
+	if rl.IsKeyPressed(rl.KeyboardKey.SPACE) {
+		s.build = !s.build
+	}
 
-	if rl.IsKeyDown(rl.KeyboardKey.SPACE) &&
-	   p.weapon_cooldown < 0 &&
+	p.tool_cooldown -= 1
+
+	if s.build &&
+	   rl.IsMouseButtonReleased(.LEFT) &&
+	   p.tool_cooldown < 0 &&
 	   p.currency > 0 {
+		mouse := rl.GetMousePosition()
 		p.currency -= 1
-		switch p.weapon {
+		switch p.tool {
 		case .Turret:
-			p.weapon_cooldown = 120
+			p.tool_cooldown = 120
 			append(
 				&s.turrets,
-				Auto_Turret{
-					pos = p.pos,
+				Auto_Turret {
+					pos = mouse,
 					width = TURRET_SIZE,
 					height = TURRET_SIZE,
 					range = 128,
-					fire_rate = 30,
+					gun = Shot_Gun{fire_rate = 30},
 				},
 			)
 		case .Horizontal_Wall:
-			p.weapon_cooldown = 30
+			p.tool_cooldown = 30
 			append(
 				&s.walls,
-				Wall{
+				Wall {
 					max_hp = 10,
 					hp = 10,
-					pos = p.pos,
+					pos = mouse,
 					width = WALL_SIZE * 2,
 					height = WALL_SIZE / 2,
 				},
 			)
 		case .Vertical_Wall:
-			p.weapon_cooldown = 30
+			p.tool_cooldown = 30
 			append(
 				&s.walls,
-				Wall{
+				Wall {
 					max_hp = 10,
 					hp = 10,
-					pos = p.pos,
+					pos = mouse,
 					width = WALL_SIZE / 2,
 					height = WALL_SIZE * 2,
 				},
 			)
 		}
+
 	}
 }
 
-// dir returns the normalized distance between two points.
-// TODO: handle more than just 8 directions.
+// dir returns a vector that points from a to b.
 dir :: proc(a, b: rl.Vector2) -> rl.Vector2 {
-	d := dist(a, b)
-	// 	angle := math.atan(f32(d.x) / f32(d.y)) * math.PI
-	// 	fmt.println(angle)
-	out := rl.Vector2{0, 0}
-	if d.x < 0 {
-		out.x = -1
+	angle := math.atan2(a.y - b.y, a.x - b.x)
+	return rl.Vector2{math.cos(angle), math.sin(angle)}
+}
+
+// dir returns a vector that points from a to b.
+dir_jitter :: proc(a, b: rl.Vector2) -> rl.Vector2 {
+	b := b
+	spread: f32 = 30
+	if rand.float32() > 0.5 {
+		b.x += rand.float32() * spread
+	} else {
+		b.x -= rand.float32() * spread
 	}
-	if d.x > 0 {
-		out.x = 1
+	if rand.float32() > 0.5 {
+		b.y += rand.float32() * spread
+	} else {
+		b.y -= rand.float32() * spread
 	}
-	if d.y < 0 {
-		out.y = -1
-	}
-	if d.y > 0 {
-		out.y = 1
-	}
-	return out
+	angle := math.atan2(a.y - b.y, a.x - b.x)
+	return rl.Vector2{math.cos(angle), math.sin(angle)}
 }
 
 dist :: proc {
@@ -376,21 +407,21 @@ abs_dist :: proc(a, b: rl.Vector2) -> rl.Vector2 {
 update_enemies :: proc(s: ^State) {
 	if s.ticks % 120 == 0 {
 		en := Enemy {
-			max_hp = 3,
-			hp = 3,
-			mood = .Idle,
-			speed = 1,
-			width = ENEMY_SIZE,
-			height = ENEMY_SIZE,
+			max_hp    = 3,
+			hp        = 3,
+			mood      = .Idle,
+			speed     = 1,
+			width     = ENEMY_SIZE,
+			height    = ENEMY_SIZE,
 			awareness = 256,
-			pos = rl.Vector2{
-				f32(rl.GetRandomValue(0, i32(s.dimensions.x))),
-				f32(rl.GetRandomValue(0, i32(s.dimensions.y))),
-			},
+			pos       = random_point_outside_rect(
+				rl.Rectangle{width = s.dimensions.x, height = s.dimensions.y},
+				10,
+			),
 		}
 		append(&s.enemies, en)
 	}
-	for en, ii in &s.enemies {
+	for &en, ii in s.enemies {
 		update_enemy(s, &en)
 		if en.hp <= 0 {
 			s.player.currency += 1
@@ -399,25 +430,53 @@ update_enemies :: proc(s: ^State) {
 	}
 }
 
+random_point_outside_rect :: proc(d: rl.Rectangle, margin: i32) -> rl.Vector2 {
+	x: f32
+	y: f32
+
+	switch rand.float32() {
+	case 0.0 ..< 0.25:
+		x = f32(rl.GetRandomValue(i32(d.x), i32(d.x + d.width)))
+		y = f32(rl.GetRandomValue(i32(d.y) - margin, i32(d.y)))
+	case 0.25 ..< 0.50:
+		x = f32(rl.GetRandomValue(i32(d.x), i32(d.x + d.width)))
+		y = f32(
+			rl.GetRandomValue(
+				i32(d.y + d.height),
+				i32(d.y + d.height) + margin,
+			),
+		)
+	case 0.50 ..< 0.75:
+		x = f32(rl.GetRandomValue(i32(d.x) - margin, i32(d.x)))
+		y = f32(rl.GetRandomValue(i32(d.y), i32(d.y + d.height)))
+	case 0.75 ..= 1.0:
+		x = f32(
+			rl.GetRandomValue(i32(d.x + d.width), i32(d.x + d.width) + margin),
+		)
+		y = f32(rl.GetRandomValue(i32(d.y), i32(d.y + d.height)))
+	}
+
+	return rl.Vector2{x, y}
+}
+
 update_enemy :: proc(s: ^State, en: ^Enemy) {
 	en.vel = rl.Vector2{}
+
+	en.age_ticks += 1
+	defer en.pos += en.vel
 
 	update_mood(s, en)
 
 	switch en.mood {
 	case .Agro:
 		en.speed = 1
-		// TODO:
-		// hunt down player
-		en.vel += dir(s.player, en) * en.speed
+		en.vel += (dir(s.player, en) * en.speed)
 	case .Idle:
 		en.speed = 0.3
-		en.vel += dir(s.player, en) * en.speed
+		en.vel += (dir(s.player, en) * en.speed)
 	}
 
-	en.pos += en.vel
-
-	for enemy in &s.enemies {
+	for &enemy in s.enemies {
 		if &enemy == en {
 			continue
 		}
@@ -426,9 +485,10 @@ update_enemy :: proc(s: ^State, en: ^Enemy) {
 		}
 	}
 
-	for w in &s.walls {
+	for &w in s.walls {
 		if rl.CheckCollisionBoxes(get_box(w), get_box(en)) {
 			en.pos = de_embed(en, w)
+			en.vel *= -25 // TODO: better movement system
 			wall_take_damage(&w)
 		}
 	}
@@ -446,6 +506,19 @@ update_enemy :: proc(s: ^State, en: ^Enemy) {
 	}
 }
 
+update_walls :: proc(s: ^State) {
+	for &w, ii in s.walls {
+		update_wall(s, &w)
+		if w.hp <= 0 {
+			ordered_remove(&s.walls, ii)
+		}
+	}
+}
+
+update_wall :: proc(s: ^State, w: ^Wall) {
+
+}
+
 update_mood :: proc(s: ^State, en: ^Enemy) {
 	d := abs_dist(s.player, en)
 	if d.x <= en.awareness && d.y <= en.awareness {
@@ -457,7 +530,7 @@ update_mood :: proc(s: ^State, en: ^Enemy) {
 }
 
 update_bullets :: proc(s: ^State) {
-	for b, ii in &s.bullets {
+	for &b, ii in s.bullets {
 		update_bullet(s, &b)
 		if b.destroyed {
 			ordered_remove(&s.bullets, ii)
@@ -476,14 +549,14 @@ update_bullet :: proc(s: ^State, b: ^Bullet) {
 	b.pos += b.vel * b.speed
 	center := rl.Vector3{b.x, b.y, 0}
 
-	for en in &s.enemies {
+	for &en in s.enemies {
 		if rl.CheckCollisionBoxSphere(get_box(en), center, b.width) {
 			enemy_take_damage(&en)
 			b.destroyed = true
 		}
 	}
 
-	for wall in &s.walls {
+	for &wall in s.walls {
 		if rl.CheckCollisionBoxSphere(get_box(wall), center, b.width) {
 			b.destroyed = true
 		}
@@ -491,7 +564,7 @@ update_bullet :: proc(s: ^State, b: ^Bullet) {
 }
 
 update_turrets :: proc(s: ^State) {
-	for en in &s.turrets {
+	for &en in s.turrets {
 		update_turret(s, &en)
 	}
 }
@@ -504,9 +577,17 @@ update_turret :: proc(s: ^State, t: ^Auto_Turret) {
 
 	t.fire_cooldown -= 1
 
+
 	if t.has_target {
 		if t.fire_cooldown <= 0 {
-			t.fire_cooldown = t.fire_rate
+			switch gun in t.gun {
+			case Machine_Gun:
+				t.fire_cooldown = gun.fire_rate
+			case Shot_Gun:
+				t.fire_cooldown = gun.fire_rate
+			case Lazer_Gun:
+				t.fire_cooldown = gun.fire_rate
+			}
 			turret_fire_at(s, t, t.target)
 		}
 	}
@@ -622,15 +703,8 @@ draw_bullet :: proc(s: ^State, en: Bullet) {
 }
 
 draw_turret :: proc(s: ^State, en: Auto_Turret) {
-	half_w_sz := en.width / 2
-	half_h_sz := en.height / 2
-	rl.DrawRectangle(
-		i32(en.x - half_w_sz),
-		i32(en.y - half_h_sz),
-		i32(en.width),
-		i32(en.height),
-		rl.GRAY,
-	)
+	// Base.
+	rl.DrawCircle(i32(en.x), i32(en.y), f32(en.width / 2), rl.GRAY)
 
 	if en.has_target && s.debug {
 		rl.DrawLine(
@@ -640,11 +714,24 @@ draw_turret :: proc(s: ^State, en: Auto_Turret) {
 			i32(en.target.y),
 			rl.LIGHTGRAY,
 		)
+
+	}
+	if en.has_target {
+		// Barrel that rotates around the base.
+		rl.DrawRectanglePro(
+			rl.Rectangle{x = en.x, y = en.y, width = 5, height = 15},
+			rl.Vector2{2.5, 0},
+			math.to_degrees(
+				math.atan2(en.target.y - en.y, en.target.x - en.x),
+			) -
+			90,
+			rl.GRAY,
+		)
 	}
 }
 
 draw_walls :: proc(s: ^State) {
-	for w in &s.walls {
+	for &w in s.walls {
 		draw_wall(s, w)
 	}
 }
@@ -688,20 +775,18 @@ get_box :: proc {
 }
 
 get_box_from_entity :: proc(en: Entity) -> rl.BoundingBox {
-	return(
-		rl.BoundingBox{
-			min = rl.Vector3{
-				en.pos.x - en.width / 2,
-				en.pos.y - en.height / 2,
-				0,
-			},
-			max = rl.Vector3{
-				en.pos.x + en.width / 2,
-				en.pos.y + en.height / 2,
-				0,
-			},
-		} \
-	)
+	return (rl.BoundingBox {
+				min = rl.Vector3 {
+					en.pos.x - en.width / 2,
+					en.pos.y - en.height / 2,
+					0,
+				},
+				max = rl.Vector3 {
+					en.pos.x + en.width / 2,
+					en.pos.y + en.height / 2,
+					0,
+				},
+			})
 }
 
 get_box_from_dims :: proc(dims: rl.Vector2) -> rl.BoundingBox {
@@ -728,15 +813,32 @@ reset_state :: proc(s: ^State) {
 
 
 turret_fire_at :: proc(s: ^State, t: ^Auto_Turret, target: rl.Vector2) {
-	direction := dir(target, t.pos)
-	bullet := Bullet {
-		pos    = t.pos,
-		vel    = direction,
-		width  = 4,
-		height = 4,
-		speed  = 1,
+	switch gun in t.gun {
+	case Machine_Gun:
+		bullet := Bullet {
+			pos    = t.pos,
+			vel    = dir(target, t.pos),
+			width  = 2,
+			height = 2,
+			speed  = 2,
+		}
+
+		append(&s.bullets, bullet)
+	case Shot_Gun:
+		for ii in 0 ..< 4 {
+			bullet := Bullet {
+				pos    = t.pos,
+				vel    = dir_jitter(target, t.pos),
+				width  = 2,
+				height = 2,
+				speed  = 2,
+			}
+
+			append(&s.bullets, bullet)
+		}
+	case Lazer_Gun:
+
 	}
-	append(&s.bullets, bullet)
 }
 
 
@@ -751,7 +853,7 @@ de_embed :: proc(subject: Entity, object: Entity) -> (pos: rl.Vector2) {
 
 	r := rl.GetCollisionRec(subject_rect, object_rect)
 
-	// pick the axis with the larger distance, then pick the side
+	// Pick the axis with the larger distance, then pick the side
 	// the collision rect is closer to. 
 	if r.width > r.height {
 		if math.abs(r.y - object_box.max.y) >
@@ -774,14 +876,12 @@ de_embed :: proc(subject: Entity, object: Entity) -> (pos: rl.Vector2) {
 
 rect_from_entity :: proc(en: Entity) -> rl.Rectangle {
 	b := get_box(en)
-	return(
-		rl.Rectangle{
-			x = b.min.x,
-			y = b.min.y,
-			width = b.max.x - b.min.x,
-			height = b.max.y - b.min.y,
-		} \
-	)
+	return (rl.Rectangle {
+				x = b.min.x,
+				y = b.min.y,
+				width = b.max.x - b.min.x,
+				height = b.max.y - b.min.y,
+			})
 }
 
 enemy_take_damage :: proc(enemy: ^Enemy) {
@@ -790,5 +890,49 @@ enemy_take_damage :: proc(enemy: ^Enemy) {
 
 wall_take_damage :: proc(wall: ^Wall) {
 	wall.hp -= 1
+}
+
+
+draw_build :: proc(s: ^State) {
+	if !s.build {
+		return
+	}
+
+	mouse := rl.GetMousePosition()
+
+	switch s.player.tool {
+	case .Turret:
+		draw_turret(
+			s,
+			Auto_Turret {
+				pos = mouse,
+				width = TURRET_SIZE,
+				height = TURRET_SIZE,
+				range = 128,
+			},
+		)
+	case .Horizontal_Wall:
+		draw_wall(
+			s,
+			Wall {
+				max_hp = 10,
+				hp = 10,
+				pos = mouse,
+				width = WALL_SIZE * 2,
+				height = WALL_SIZE / 2,
+			},
+		)
+	case .Vertical_Wall:
+		draw_wall(
+			s,
+			Wall {
+				max_hp = 10,
+				hp = 10,
+				pos = mouse,
+				width = WALL_SIZE / 2,
+				height = WALL_SIZE * 2,
+			},
+		)
+	}
 }
 
